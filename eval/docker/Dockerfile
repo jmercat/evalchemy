@@ -16,13 +16,17 @@ ENV SAGEMAKER_SUBMIT_DIRECTORY=/opt/ml/code
 
 RUN pip install --upgrade pip
 
+# Explicitly install PyTorch with CUDA 12.1
+
 COPY pyproject.toml /opt/ml/code/pyproject.toml
+COPY README.md /opt/ml/code/README.md
 COPY eval/chat_benchmarks/alpaca_eval /opt/ml/code/eval/chat_benchmarks/alpaca_eval
 COPY eval/chat_benchmarks/MTBench /opt/ml/code/eval/chat_benchmarks/MTBench
 RUN cd /opt/ml/code && pip install -e ".[eval]"
 RUN cd /opt/ml/code/eval/chat_benchmarks/alpaca_eval && pip install -e .
 
-RUN pip install torch torchvision
+RUN pip install torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cu121
+# RUN pip install torch torchvision
 RUN pip uninstall flash-attn -y
 RUN pip install flash-attn
 

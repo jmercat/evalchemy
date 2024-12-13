@@ -35,6 +35,9 @@ def get_image(user, profile="default", region="us-west-2"):
         f"aws --region {region} --profile {profile} sts get-caller-identity --query Account --output text"
     )
     docker_dir = Path(__file__).parent
+    os.chdir(docker_dir.parent.parent)
+    print("Current working directory:")
+    print(os.getcwd())
 
     algorithm_name = f"{user}-{NAME}"
     dockerfile_base = docker_dir / "Dockerfile"
