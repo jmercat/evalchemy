@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import time
+import yaml
 from typing import Optional, List, Dict, Union
 from pathlib import Path
 
@@ -26,6 +27,8 @@ import lm_eval.models
 
 from eval.task import TaskManager as InstructTaskManager
 from eval.eval_tracker import DCEvaluationTracker
+
+from eval.constants import LIST_OPENAI_MODELS
 
 
 class ModelInitializer:
@@ -143,6 +146,11 @@ def setup_custom_parser():
         default=None,
         help="Model name for direct database tracking. If not set, the model path will be used instead.",
     )
+    db_group.add_argument(
+        "--overwrite-database",
+        action="store_true",
+        help="By default, we do not overwrite database entry, but if this is passed, we will compute eval even if found in database.",
+    )
 
     db_group.add_argument(
         "--is_external_model",
@@ -172,6 +180,9 @@ def setup_custom_parser():
     )
 
     parser.add_argument(
+        "--config", type=str, help="Path to config yaml. Overwrites --batch_size, --tasks, and --annotator_model"
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Run evalutaions in debug mode on a few examples",
@@ -184,6 +195,7 @@ def evaluate(
     task_manager: InstructTaskManager,
     pretrain_task_manager: PretrainTaskManager,
     task_list: List[str],
+    batch_sizes_list: List[int],
     verbosity: str = "INFO",
     args=None,
     **eval_kwargs,
@@ -200,6 +212,8 @@ def evaluate(
             Manager for pre-training evaluation tasks.
         task_list (List[str]):
             List of task names to evaluate the model on.
+        batch_sizes_list (List[int]):
+            List of batch sizes for each task.
         verbosity (str, optional):
             Logging verbosity level. Defaults to "INFO".
         args (Any, optional):
@@ -217,7 +231,9 @@ def evaluate(
 
     # Split tasks between benchmark and pretrain
     benchmark_tasks = [t for t in task_list if t in task_manager.tasks]
+    benchmark_batch_sizes = [b for (t, b) in zip(task_list, batch_sizes_list) if t in task_manager.tasks]
     pretrain_tasks = [t for t in task_list if t in pretrain_task_manager.all_tasks]
+    pretrain_batch_sizes = [b for (t, b) in zip(task_list, batch_sizes_list) if t in pretrain_task_manager.all_tasks]
 
     unknown_tasks = set(task_list).difference(set(benchmark_tasks)).difference(set(pretrain_tasks))
 
@@ -237,7 +253,8 @@ def evaluate(
         generate_methods = task_manager.get_list_generate_responses(benchmark_tasks)
         generation_results = []
         valid_tasks = []  # Keep track of valid tasks
-        for method, task in zip(generate_methods, benchmark_tasks):
+        for method, task, batch_size in zip(generate_methods, benchmark_tasks, benchmark_batch_sizes):
+            lm.batch_size_per_gpu = batch_size
             result = method(lm)
             if result is not None:  # Only keep valid results and their corresponding tasks
                 generation_results.append(result)
@@ -262,34 +279,35 @@ def evaluate(
     # Run pretrain evaluations if any exist
     if pretrain_tasks and args is not None:
         try:
-            pretrain_results = pretrain_evaluator.simple_evaluate(
-                model=args.model,
-                model_args=args.model_args,
-                tasks=pretrain_tasks,
-                num_fewshot=args.num_fewshot,
-                batch_size=args.batch_size,
-                max_batch_size=args.max_batch_size,
-                device=args.device,
-                use_cache=args.use_cache,
-                limit=args.limit,
-                check_integrity=args.check_integrity,
-                write_out=args.write_out,
-                log_samples=args.log_samples,
-                evaluation_tracker=args.evaluation_tracker if hasattr(args, "evaluation_tracker") else None,
-                system_instruction=args.system_instruction,
-                apply_chat_template=args.apply_chat_template,
-                fewshot_as_multiturn=args.fewshot_as_multiturn,
-                gen_kwargs=args.gen_kwargs,
-                task_manager=pretrain_task_manager,
-                verbosity=args.verbosity,
-                predict_only=args.predict_only,
-                random_seed=args.seed[0] if hasattr(args, "seed") else None,
-                numpy_random_seed=args.seed[1] if hasattr(args, "seed") else None,
-                torch_random_seed=args.seed[2] if hasattr(args, "seed") else None,
-                fewshot_random_seed=args.seed[3] if hasattr(args, "seed") else None,
-            )
-            if pretrain_results is not None:
-                results["results"].update(pretrain_results.get("results", {}))
+            for pretrain_task, batch_size in zip(pretrain_tasks, pretrain_batch_sizes):
+                pretrain_results = pretrain_evaluator.simple_evaluate(
+                    model=args.model,
+                    model_args=args.model_args,
+                    tasks=[pretrain_task],
+                    num_fewshot=args.num_fewshot,
+                    batch_size=batch_size,
+                    max_batch_size=args.max_batch_size,
+                    device=args.device,
+                    use_cache=args.use_cache,
+                    limit=args.limit,
+                    check_integrity=args.check_integrity,
+                    write_out=args.write_out,
+                    log_samples=args.log_samples,
+                    evaluation_tracker=args.evaluation_tracker if hasattr(args, "evaluation_tracker") else None,
+                    system_instruction=args.system_instruction,
+                    apply_chat_template=args.apply_chat_template,
+                    fewshot_as_multiturn=args.fewshot_as_multiturn,
+                    gen_kwargs=args.gen_kwargs,
+                    task_manager=pretrain_task_manager,
+                    verbosity=args.verbosity,
+                    predict_only=args.predict_only,
+                    random_seed=args.seed[0] if hasattr(args, "seed") else None,
+                    numpy_random_seed=args.seed[1] if hasattr(args, "seed") else None,
+                    torch_random_seed=args.seed[2] if hasattr(args, "seed") else None,
+                    fewshot_random_seed=args.seed[3] if hasattr(args, "seed") else None,
+                )
+                if pretrain_results is not None:
+                    results["results"].update(pretrain_results.get("results", {}))
         except Exception as e:
             eval_logger.error(f"Error in pretrain evaluation: {str(e)}")
 
@@ -328,10 +346,22 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
         parser = setup_custom_parser()
         args = parse_eval_args(parser)
 
+    if args.config is not None:
+        # This overwrites `--tasks` and `--batch_size`
+        with open(args.config, "r") as file:
+            tasks_yaml = yaml.safe_load(file)
+        args.tasks = ",".join([t["task_name"] for t in tasks_yaml["tasks"]])
+        batch_sizes_list = [t["batch_size"] for t in tasks_yaml["tasks"]]
+        args.annotator_model = tasks_yaml.get("annotator_model", args.annotator_model)
+    else:
+        batch_sizes_list = [args.batch_size for _ in range(len(args.tasks.split(",")))]
+
     # Initialize evaluation tracker
     if args.output_path:
         args.hf_hub_log_args += f",output_path={args.output_path}"
     evaluation_tracker = setup_evaluation_tracker(args.output_path, args.use_database)
+
+    task_list = args.tasks.split(",")
 
     # If model_id is provided, lookup model weights location from database
     if args.model_id:
@@ -344,12 +374,22 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
         except Exception as e:
             utils.eval_logger.error(f"Failed to retrieve model name from database: {str(e)}")
             sys.exit(1)
+        if not args.overwrite_database:
+            task_list = [
+                task for task in task_list if not evaluation_tracker.check_if_already_done(task, args.model_id)
+            ]
+            if len(task_list) == 0:
+                utils.eval_logger.info("All tasks passed in were found in the database.")
+                exit()
     elif args.model_name:
         model_name = args.model_name
         args.model_args = update_model_args_with_name(args.model_args or "", model_name)
 
     # Initialize tasks
-    task_list = args.tasks.split(",")
+    if args.annotator_model in LIST_OPENAI_MODELS:
+        if not os.getenv("OPENAI_API_KEY"):
+            raise ValueError("Please set OPENAI_API_KEY")
+
     task_manager = InstructTaskManager(annotator_model=args.annotator_model, debug=args.debug)
     pretrain_task_manager = PretrainTaskManager(args.verbosity, include_path=args.include_path)
 
@@ -357,7 +397,7 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
 
     # Initialize model
     try:
-        lm = initialize_model(args.model, args.model_args, args.batch_size, args.max_batch_size)
+        lm = initialize_model(args.model, args.model_args)
     except Exception as e:
         utils.eval_logger.error(f"Failed to initialize model: {str(e)}")
         sys.exit(1)
@@ -388,22 +428,15 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
         task_manager=task_manager,
         pretrain_task_manager=pretrain_task_manager,
         task_list=task_list,
+        batch_sizes_list=batch_sizes_list,
         verbosity=args.verbosity,
         args=args,
-        num_fewshot=args.num_fewshot,
-        batch_size=args.batch_size,
-        max_batch_size=args.max_batch_size,
-        device=args.device,
-        use_cache=args.use_cache,
-        limit=args.limit,
-        annotator_model=args.annotator_model,
-        evaluation_tracker=evaluation_tracker,
     )
 
     # Add metadata to results
     is_main_process = lm.accelerator.process_index == 0 if hasattr(lm, 'accelerator') else lm.world_size <= 1
     if is_main_process:
-        add_results_metadata(results, args, lm)
+        add_results_metadata(results, batch_sizes_list, args, lm)
         handle_evaluation_output(results, args, evaluation_tracker, wandb_logger)
 
     if dist.is_initialized():
@@ -432,8 +465,6 @@ def setup_evaluation_tracker(output_path: str, use_database: bool) -> DCEvaluati
 def initialize_model(
     model: Union[str, LM],
     model_args: Optional[str] = None,
-    batch_size: int = None,
-    max_batch_size: Optional[int] = None,
     device: Optional[str] = None,
 ) -> LM:
     """
@@ -446,10 +477,6 @@ def initialize_model(
         model_args (Optional[str], optional):
             Additional arguments for model initialization as a string.
             Only used if model is provided as a string. Defaults to None.
-        batch_size (Optional[int], optional):
-            Batch size for model inference. Defaults to None.
-        max_batch_size (Optional[int], optional):
-            Maximum allowed batch size. Defaults to None.
         device (Optional[str], optional):
             Device to load the model on (e.g., 'cuda', 'cpu'). Defaults to None.
 
@@ -463,8 +490,6 @@ def initialize_model(
             model_args = ""
 
         config = {
-            "batch_size": batch_size,
-            "max_batch_size": max_batch_size,
             "device": device,
         }
 
@@ -479,7 +504,7 @@ def initialize_model(
     return lm
 
 
-def add_results_metadata(results: Dict, args: argparse.Namespace, lm: LM) -> None:
+def add_results_metadata(results: Dict, batch_sizes_list: List[int], args: argparse.Namespace, lm: LM) -> None:
     """
     Add metadata and configuration to results.
 
@@ -488,6 +513,8 @@ def add_results_metadata(results: Dict, args: argparse.Namespace, lm: LM) -> Non
             Dictionary of evaluation results to be augmented with metadata.
             The function will modify this dictionary in-place to add
             configuration and runtime information.
+        batch_sizes_list (List[int]):
+            List of batch sizes for each task.
         args (argparse.Namespace):
             Command line arguments containing runtime configuration
             and parameters used during evaluation.
@@ -506,8 +533,8 @@ def add_results_metadata(results: Dict, args: argparse.Namespace, lm: LM) -> Non
             else args.model.config._name_or_path if hasattr(args.model, "config") else type(args.model).__name__
         ),
         "model_args": args.model_args,
-        "batch_size": args.batch_size,
-        "batch_sizes": (list(lm.batch_sizes.values()) if hasattr(lm, "batch_sizes") else []),
+        "tasks": args.tasks,
+        "batch_sizes": batch_sizes_list,
         "device": args.device,
         "use_cache": args.use_cache,
         "limit": args.limit,

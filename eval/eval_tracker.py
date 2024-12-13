@@ -317,6 +317,18 @@ class DCEvaluationTracker:
             session.rollback()
             raise RuntimeError(f"Database error in insert_eval_results: {str(e)}")
 
+    def check_if_already_done(self, name: str, model_id: uuid.UUID):
+        with self.session_scope() as session:
+            rows = session.query(EvalResult).filter_by(model_id=model_id).all()
+            if not rows:
+                return False
+
+            for row in rows:
+                eval_setting = session.query(EvalSetting).filter_by(id=row.eval_setting_id).first()
+                if name in eval_setting.name:
+                    return True
+            return False
+
     def update_evalresults_db(
         self,
         eval_log_dict: Dict[str, Any],
@@ -355,8 +367,11 @@ class DCEvaluationTracker:
             eval_logger.info(f"Updating results for model_id: {str(model_id)}")
 
             results = eval_log_dict["results"]
-            benchmark_name = next(iter(results))
-            updated_results = self.update_results_with_benchmark(flatten_dict(results[benchmark_name]), benchmark_name)
+            updated_results = {}
+            for benchmark_name in results:
+                updated_results.update(
+                    self.update_results_with_benchmark(flatten_dict(results[benchmark_name]), benchmark_name)
+                )
 
             self.insert_eval_results(
                 model_id=model_id,
