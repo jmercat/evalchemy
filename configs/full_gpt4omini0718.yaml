@@ -3,15 +3,15 @@ tasks:
   - task_name: alpaca_eval
     batch_size: 32
   - task_name: WildBench
-    batch_size: 16
+    batch_size: 8
   - task_name: MixEval
     batch_size: 32
   - task_name: MTBench
     batch_size: 32
   - task_name: RepoBench
-    batch_size: 8
+    batch_size: 4
   - task_name: zeroeval
-    batch_size: 8
+    batch_size: 32
   - task_name: IFEval
     batch_size: 32
   - task_name: mmlu
@@ -23,4 +23,6 @@ tasks:
   - task_name: MBPP
     batch_size: 32
   - task_name: drop
+    batch_size: 32
+  - task_name: hendrycks_math
     batch_size: 32
