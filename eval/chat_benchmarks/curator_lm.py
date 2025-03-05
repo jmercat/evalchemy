@@ -25,6 +25,7 @@ class CuratorAPIModel(TemplateLM):
         max_requests_per_minute: int = None,
         max_tokens_per_minute: int = None,
         seconds_to_pause_on_rate_limit: int = None,
+        batch: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -32,6 +33,26 @@ class CuratorAPIModel(TemplateLM):
         self.model_name = model or pretrained
 
         self.model_args = kwargs
+
+        self.gen_kwargs = {"batch": batch}
+        if "gemini" in self.model_name and "thinking" in self.model_name:
+            max_requests_per_minute = max_requests_per_minute or 200
+            max_tokens_per_minute = max_tokens_per_minute or 400_000
+        elif "gemini" in self.model_name:
+            max_requests_per_minute = max_requests_per_minute or 2000
+            max_tokens_per_minute = max_tokens_per_minute or 4_000_000
+        elif "claude" in self.model_name:
+            max_requests_per_minute = max_requests_per_minute or 2000
+            max_tokens_per_minute = max_tokens_per_minute or 80_000
+            if "thinking" in self.model_name:
+                self.gen_kwargs["thinking"] = {"type": "enabled", "budget_tokens": max_length - 1024}
+                self.model_name = (
+                    self.model_name.replace("-thinking-", "")
+                    .replace("-thinking", "")
+                    .replace("thinking-", "")
+                    .replace("thinking", "")
+                )
+
         self.model_args.update(
             {
                 "model": self.model_name,
@@ -43,22 +64,11 @@ class CuratorAPIModel(TemplateLM):
             }
         )
 
-        if "gemini" in self.model_name and "thinking" in self.model_name:
-            max_requests_per_minute = max_requests_per_minute or 200
-            max_tokens_per_minute = max_tokens_per_minute or 400_000
-        elif "gemini" in self.model_name:
-            max_requests_per_minute = max_requests_per_minute or 2000
-            max_tokens_per_minute = max_tokens_per_minute or 4_000_000
-        elif "claude" in self.model_name:
-            max_requests_per_minute = max_requests_per_minute or 2000
-            max_tokens_per_minute = max_tokens_per_minute or 80_000
-
         if tokenized_requests:
             raise NotImplementedError("Tokenized requests not implemented for curator.")
         self.tokenized_requests = False
         self.max_length = max_length
         self.llm = None
-        self.gen_kwargs = {}
         self.eos = None
         if "temperature" in kwargs:
             self.gen_kwargs["temperature"] = kwargs["temperature"]
@@ -103,16 +113,37 @@ class CuratorAPIModel(TemplateLM):
             "top_p": top_p,
             "stop": stop,
         }
+        additional_args = {}
+        backend_params = self.backend_params.copy()
+        if self.gen_kwargs.get("batch", False):
+            # backend_params for rate limiting are not compatible with batch requests
+            backend_params = {"require_all_responses": True}
+            additional_args["batch"] = True
         if "o1" in self.model_name:
             print("Warning: O1 model does not support top_p, stop, or temperature. Ignoring them.")
             gen_kwargs.pop("top_p")
             gen_kwargs.pop("stop")
             gen_kwargs.pop("temperature")
+        if "claude" in self.model_name:
+            gen_kwargs.pop("max_completion_tokens")
+            gen_kwargs.pop("stop")
+            gen_kwargs["max_tokens"] = max_tokens
+            if "thinking" in self.gen_kwargs:
+                gen_kwargs["thinking"] = self.gen_kwargs["thinking"]
+                gen_kwargs["thinking"]["budget_tokens"] = max_tokens - 1024
+                # `temperature` may only be set to 1 when thinking is enabled.
+                # Please consult our documentation at https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking'
+                gen_kwargs["temperature"] = 1
+                # `top_p` must be unset when thinking is enabled. (same documentation)
+                gen_kwargs.pop("top_p")
         if self.llm is None:
             self.eos = eos
             self.gen_kwargs = gen_kwargs.copy()
             self.llm = curator.LLM(
-                model_name=self.model_name, generation_params=gen_kwargs, backend_params=self.backend_params.copy()
+                model_name=self.model_name,
+                generation_params=gen_kwargs,
+                backend_params=backend_params,
+                **additional_args,
             )
         else:
             if self.gen_kwargs != gen_kwargs:
@@ -121,7 +152,10 @@ class CuratorAPIModel(TemplateLM):
                 )
                 self.gen_kwargs = gen_kwargs.copy()
                 self.llm = curator.LLM(
-                    model_name=self.model_name, generation_params=gen_kwargs, backend_params=self.backend_params.copy()
+                    model_name=self.model_name,
+                    generation_params=gen_kwargs,
+                    backend_params=backend_params,
+                    **additional_args,
                 )
         return messages
 
