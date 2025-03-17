@@ -325,7 +325,9 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
         args.model_args = update_model_args_with_name(args.model_args or "", model_name)
 
     # Initialize tasks
-    task_manager = InstructTaskManager(annotator_model=args.annotator_model, debug=args.debug, seed=args.seed)
+    task_manager = InstructTaskManager(
+        annotator_model=args.annotator_model, debug=args.debug, seed=args.seed, task_list=task_list
+    )
     pretrain_task_manager = PretrainTaskManager(args.verbosity, include_path=args.include_path)
 
     utils.eval_logger.info(f"Selected Tasks: {[task for task in task_list]}")
@@ -486,9 +488,7 @@ def add_results_metadata(results: Dict, batch_sizes_list: List[int], args: argpa
         "model": (
             args.model
             if isinstance(args.model, str)
-            else args.model.config._name_or_path
-            if hasattr(args.model, "config")
-            else type(args.model).__name__
+            else args.model.config._name_or_path if hasattr(args.model, "config") else type(args.model).__name__
         ),
         "model_args": args.model_args,
         "tasks": args.tasks,

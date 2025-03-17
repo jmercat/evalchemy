@@ -111,11 +111,14 @@ class TaskManager:
     Provides a unified interface for both class-based benchmarks and legacy tasks.
     """
 
-    def __init__(self, benchmarks_dir: str = "chat_benchmarks", **benchmark_kwargs):
+    def __init__(
+        self, benchmarks_dir: str = "chat_benchmarks", task_list: Optional[List[str]] = None, **benchmark_kwargs
+    ):
         self.logger = logging.getLogger("TaskManager")
         self.tasks: Dict[str, Any] = {}
         self.benchmark_instances: Dict[str, BaseBenchmark] = {}
         self.benchmark_kwargs = benchmark_kwargs
+        self.task_list = task_list
         self.list_of_tasks_that_require_annotator_model = []
 
         # Load benchmarks from directory
@@ -135,6 +138,10 @@ class TaskManager:
             os.environ["OPENAI_API_KEY"] = ""  # Empty string instead of None
 
         for item in os.listdir(current_dir):
+            # Skip loading if task_list is provided and this item is not in it
+            if self.task_list is not None and item not in self.task_list:
+                continue
+
             item_path = os.path.join(current_dir, item)
             if not os.path.isdir(item_path) or item.startswith("__"):
                 continue
