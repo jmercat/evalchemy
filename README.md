@@ -133,7 +133,7 @@ We have recorded reproduced results against published numbers for these benchmar
 
 ### Basic Usage
 
-Make sure your `OPENAI_API_KEY` is set in your environment before running evaluations.
+Make sure your `OPENAI_API_KEY` is set in your environment before running evaluations, if an LLM judge is required. 
 
 ```bash
 python -m eval.eval \

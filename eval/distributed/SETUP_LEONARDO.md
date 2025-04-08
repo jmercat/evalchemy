@@ -15,12 +15,12 @@ Follow these steps to set up the environment on Leonardo:
 ```bash
 # Set up environment variables in your .bashrc for easier access
 cat << 'EOF' >> ~/.bashrc
-DCFT=$WORK/DCFT_shared
-EVALCHEMY=$DCFT/evalchemy/
-DCFT_MAMBA=$DCFT/mamba
-EVALCHEMY_GPU_ENV=$EVALCHEMY/env/cu121-evalchemy
-EVALCHEMY_CPU_ENV=$EVALCHEMY/env/cpu-evalchemy
-HF_HUB_CACHE=$DCFT/hub
+export DCFT=$WORK/DCFT_shared
+export EVALCHEMY=$DCFT/evalchemy/
+export DCFT_MAMBA=$DCFT/mamba
+export EVALCHEMY_GPU_ENV=$EVALCHEMY/env/cu121-evalchemy
+export EVALCHEMY_CPU_ENV=$EVALCHEMY/env/cpu-evalchemy
+export HF_HUB_CACHE=$DCFT/hub
 EOF
 source ~/.bashrc
 
@@ -30,9 +30,6 @@ cd $EVALCHEMY
 
 # Create huggingface cache dir
 mkdir -p $HF_HUB_CACHE
-
-# Create evalchemy_results dir
-mkdir -p $DCFT/evalchemy_results
 
 # Set appropriate permissions for collaboration
 # Owner and group get full access, others have no access
@@ -82,7 +79,7 @@ source ${DCFT_MAMBA}/bin/activate ${EVALCHEMY_CPU_ENV}
 pip uninstall -y torch torchvision torchaudio && pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # Test CPU environment
-OPENAI_API_KEY=NONE python -m eval.eval --model upload_to_hf --tasks AIME25 --model_args repo_id=mlfoundations-dev/AIME25_evalchemy
+python -m eval.eval --model upload_to_hf --tasks AIME24 --model_args repo_id=mlfoundations-dev/evalset_2870
 
 # Install the right torch for GPU env
 source ${DCFT_MAMBA}/bin/activate ${EVALCHEMY_GPU_ENV}
@@ -100,7 +97,7 @@ huggingface-cli download mlfoundations-dev/evalset_2870 --repo-type dataset
 huggingface-cli download open-thoughts/OpenThinker-7B
 
 # Request an interactive node for testing
-salloc --nodes=1 --ntasks-per-node=1 --account=EUHPC_E03_068 --partition=boost_usr_prod --qos=boost_qos_dbg --gres=gpu:1
+salloc --nodes=1 --ntasks-per-node=1 --account=EUHPC_E03_068 --partition=boost_usr_prod --qos=boost_qos_dbg --gres=gpu:1 --cpus-per-task=32
 
 # Verify GPU is available
 srun bash -c 'nvidia-smi'

@@ -37,8 +37,9 @@ class SWEBenchBenchmark(BaseBenchmark):
         max_tokens: int = 4096,
         clean_patches: bool = True,
         fix_mode: str = "aggressive",
+        system_instruction: Optional[str] = None,
     ):
-        super().__init__(logger)
+        super().__init__(logger=logger, system_instruction=system_instruction)
         self.debug = debug
         self.max_tokens = max_tokens
         self.dataset_name = dataset_name
@@ -74,7 +75,7 @@ class SWEBenchBenchmark(BaseBenchmark):
 
         all_instances = []
         for idx, instance in enumerate(instances):
-            inputs = model.apply_chat_template([{"role": "user", "content": instance["text"]}])
+            inputs = self._prepare_messages([{"role": "user", "content": instance["text"]}], model)
             all_instances.append(
                 Instance(
                     "generate_until",
