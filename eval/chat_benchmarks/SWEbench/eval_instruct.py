@@ -1,6 +1,9 @@
 import json
 import logging
 import tempfile
+import os
+import sys
+from pathlib import Path
 
 from swebench.harness.run_evaluation import main as run_evaluation
 from swebench.harness.constants import (
@@ -8,6 +11,8 @@ from swebench.harness.constants import (
     KEY_MODEL,
     KEY_PREDICTION,
 )
+
+from patch_cleaner import clean_patch_file
 
 from datasets import load_dataset
 from eval.task import BaseBenchmark
@@ -30,11 +35,15 @@ class SWEBenchBenchmark(BaseBenchmark):
         debug: bool = False,
         logger: Optional[logging.Logger] = None,
         max_tokens: int = 4096,
+        clean_patches: bool = True,
+        fix_mode: str = "aggressive",
     ):
         super().__init__(logger)
         self.debug = debug
         self.max_tokens = max_tokens
         self.dataset_name = dataset_name
+        self.clean_patches = clean_patches  # Flag to control patch cleaning
+        self.fix_mode = fix_mode  # Mode for patch cleaning
         """
         Options for <dataset + split(s)>:
         - princeton-nlp/SWE-bench
@@ -100,16 +109,86 @@ class SWEBenchBenchmark(BaseBenchmark):
 
         return {"temp_dir_obj": temp_dir_obj, "predictions_path": output_path}
 
+    def clean_prediction_patches(self, predictions_path: str) -> None:
+        """
+        Clean the patches in the predictions file to improve patch application success.
+        
+        Args:
+            predictions_path: Path to the predictions JSON file
+        """
+        if not self.clean_patches:
+            self.logger.info("Patch cleaning disabled, skipping...")
+            return
+            
+        self.logger.info(f"Cleaning patches in {predictions_path}...")
+        patch_counts = {"total": 0, "cleaned": 0, "failed": 0}
+        
+        try:
+            with open(predictions_path, "r") as f:
+                predictions = json.load(f)
+            
+            # Process each instance prediction
+            for instance_id, data in predictions.items():
+                if KEY_PREDICTION not in data:
+                    continue
+                    
+                prediction = data[KEY_PREDICTION]
+                patch_counts["total"] += 1
+                
+                # Create a temporary file for the patch
+                temp_patch_path = os.path.join(os.path.dirname(predictions_path), f"{instance_id}_patch.diff")
+                
+                # Write the prediction to the temporary file
+                with open(temp_patch_path, "w") as f:
+                    f.write(prediction)
+                
+                # Clean the patch
+                cleaned_path = clean_patch_file(
+                    temp_patch_path, 
+                    output_path=temp_patch_path,
+                    verbose=True,
+                    fix_mode=self.fix_mode
+                )
+                
+                if cleaned_path:
+                    # Read the cleaned patch back
+                    with open(cleaned_path, "r") as f:
+                        cleaned_patch = f.read()
+                    
+                    # Update the prediction with the cleaned patch
+                    data[KEY_PREDICTION] = cleaned_patch
+                    patch_counts["cleaned"] += 1
+                else:
+                    patch_counts["failed"] += 1
+                
+                # Remove the temporary file
+                if os.path.exists(temp_patch_path):
+                    os.remove(temp_patch_path)
+            
+            # Write the updated predictions back to the file
+            with open(predictions_path, "w") as f:
+                json.dump(predictions, f, indent=2)
+            
+            self.logger.info(f"Patch cleaning complete: {patch_counts['cleaned']}/{patch_counts['total']} patches cleaned successfully")
+            if patch_counts["failed"] > 0:
+                self.logger.warning(f"Failed to clean {patch_counts['failed']} patches")
+                
+        except Exception as e:
+            self.logger.error(f"Error cleaning patches: {str(e)}")
+
     def evaluate_responses(self, results: Dict[str, Any]) -> Dict[str, float]:
         temp_dir_obj = results["temp_dir_obj"]
         predictions_path = results["predictions_path"]
+        
+        # Clean patches before evaluation
+        # self.clean_prediction_patches(predictions_path)
 
         report_path = run_evaluation(
             dataset_name=self.dataset_name,
             split="test",
             predictions_path=predictions_path,
             instance_ids=None,
-            max_workers=4,
+            max_workers=32,
             force_rebuild=False,
             cache_level="none",
             clean=False,
