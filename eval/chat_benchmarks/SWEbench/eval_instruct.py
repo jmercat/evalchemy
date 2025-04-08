@@ -35,7 +35,7 @@ class SWEBenchBenchmark(BaseBenchmark):
         debug: bool = False,
         logger: Optional[logging.Logger] = None,
         max_tokens: int = 4096,
-        clean_patches: bool = True,
+        clean_patches: bool = False,
         fix_mode: str = "aggressive",
         system_instruction: Optional[str] = None,
     ):
