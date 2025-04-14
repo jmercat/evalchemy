@@ -19,7 +19,7 @@ class CuratorAPIModel(TemplateLM):
         model: str = None,
         pretrained: str = None,
         max_length: Optional[int] = 2048,
-        max_retries: int = 20,
+        max_retries: int = 50,
         timeout: int = 300,
         tokenized_requests: bool = False,
         max_requests_per_minute: int = None,
