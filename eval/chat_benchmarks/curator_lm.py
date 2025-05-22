@@ -126,8 +126,8 @@ class CuratorAPIModel(TemplateLM):
             backend_params["base_url"] = "https://api.deepseek.com/"
             backend_params["api_key"] = os.environ["DEEPSEEK_API_KEY"]
             gen_kwargs["temperature"] = 0
-        if "o1" or "o3" in self.model_name:
-            print("Warning: O1 model does not support top_p, stop, or temperature. Ignoring them.")
+        if "o1" in self.model_name or "o3" in self.model_name or "o4" in self.model_name:
+            print("Warning: GPT-o models do not support top_p, stop, or temperature. Ignoring them.")
             gen_kwargs.pop("top_p", None)
             gen_kwargs.pop("stop", None)
             gen_kwargs.pop("temperature", None)
