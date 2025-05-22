@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import time
+import math
 from typing import Dict, List, Optional, Union
 
 import lm_eval.api.metrics
@@ -20,7 +21,8 @@ from lm_eval.api.model import LM
 from lm_eval.loggers import EvaluationTracker, WandbLogger
 from lm_eval.loggers.utils import add_env_info, add_tokenizer_info, get_git_commit_hash
 from lm_eval.tasks import TaskManager as PretrainTaskManager
-from lm_eval.utils import handle_non_serializable, sanitize_model_name, simple_parse_args_string
+from lm_eval.utils import sanitize_model_name, simple_parse_args_string
+from lm_eval.utils import handle_non_serializable as _orig_handle
 
 from eval.chat_benchmarks.curator_lm import CuratorAPIModel  # register curator model
 from eval.chat_benchmarks.precomputed_hf_lm import PrecomputedHFLM  # register precomputed_hf model
@@ -29,6 +31,34 @@ from eval.constants import LIST_OPENAI_MODELS
 from eval.eval_tracker import DCEvaluationTracker
 from eval.task import TaskManager as InstructTaskManager
 
+
+_BIT_CAP = 15_000 
+def handle_non_serializable_extended(o):
+    """
+    Delegates to the stock helper, but for gigantic SymPy Integer /
+    Rational objects returns a short placeholder *without* calling str().
+    """
+    try:
+        from sympy import Integer, Rational
+        if isinstance(o, Integer):
+            if o.p.bit_length() > _BIT_CAP:
+                digits = int(o.p.bit_length() * math.log10(2)) + 1
+                return f"<Integer ~{digits} digits>"
+            return str(int(o)) # safe: fits under the guard
+
+        if isinstance(o, Rational):
+            num_bits = o.p.bit_length()
+            den_bits = o.q.bit_length()
+            if num_bits > _BIT_CAP or den_bits > _BIT_CAP:
+                d_num = int(num_bits * math.log10(2)) + 1
+                d_den = int(den_bits * math.log10(2)) + 1
+                return f"<Rational {d_num}/{d_den} digits>"
+            return str(o)  # small enough
+    except ModuleNotFoundError:
+        pass
+
+    # Everything else: NumPy ints, sets, etc.
+    return _orig_handle(o)
 
 def setup_custom_parser():
     """
@@ -549,7 +579,12 @@ def handle_evaluation_output(
     if args.log_samples:
         samples = results.pop("samples")
 
-    dumped = json.dumps(results, indent=2, default=handle_non_serializable, ensure_ascii=False)
+    dumped = json.dumps(
+        results,
+        indent=2,
+        default=handle_non_serializable_extended,
+        ensure_ascii=False,
+    )
     if args.show_config:
         print(dumped)
 

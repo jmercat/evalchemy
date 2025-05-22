@@ -13,12 +13,12 @@ from lm_eval.api.model import LM
 
 from eval.task import BaseBenchmark
 
-from .livecodebench_utils import lcb_run, map_to_example, post_process_code, translate_private_test_cases
+from .codeforces_utils import codeforces_run, post_process_code, rating_to_difficulty
 
 HF_HUB_CACHE = os.environ.get("HF_HUB_CACHE")
 if not HF_HUB_CACHE:
     print(
-        "WARNING: HF_HUB_CACHE environment variable is not set, using default cache directory ~/.cache/huggingface/hub for LiveCodeBench benchmark"
+        "WARNING: HF_HUB_CACHE environment variable is not set, using default cache directory ~/.cache/huggingface/hub for CodeForces benchmark"
     )
 
 
@@ -31,20 +31,16 @@ def has_code(response):
 
 # Calculate mean and standard error for all metrics
 def calc_stats(values):
-    arr    = np.asarray(values, dtype=float)
-    mask   = ~np.isnan(arr)
-    if mask.sum() == 0:          # all NaNs → undefined; return 0,0
-        return 0.0, 0.0
-    mean   = arr[mask].mean()
-    stderr = np.std(arr[mask], ddof=1) / np.sqrt(mask.sum())
+    mean = np.mean(values)
+    stderr = np.std(values, ddof=1) / np.sqrt(len(values))
     return mean, stderr
 
 
-class LiveCodeBenchBenchmark(BaseBenchmark):
+class CodeForcesBenchmark(BaseBenchmark):
     """
-    LiveCodeBench Benchmark for evaluating the math reasoning of LLMs.
+    CodeForces Benchmark for evaluating the code reasoning of LLMs.
 
-    Follows the evaluation logic of hendrycks_math answer extraction.
+    Follows the evaluation logic of CodeForces + what code elo requires.
     """
 
     def __init__(
@@ -55,7 +51,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         system_instruction: Optional[str] = None,
     ):
         """
-        Initialize LiveCodeBench benchmark.
+        Initialize CodeForces benchmark.
 
         Args:
             debug: If set, only evaluate on 2 examples
@@ -67,7 +63,8 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         self.debug = debug
         self.max_new_tokens = 32768  # set higher to avoid truncation for reasoning models
         self.seed = seed
-        self.n_repeat = 6
+        self.n_repeat = 3
+        self.filter_interaction_questions = True
 
     def generate_responses(self, model: LM) -> Dict[str, Any]:
         """
@@ -84,23 +81,54 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         if self.debug:
             examples = examples[:10]
 
+        # TODO - figure out how to support these?
+        if self.filter_interaction_questions:
+            examples = [x for x in examples if not x["interaction_format"]]
+
         all_outputs = []
+
+        # Taken from the original code / paper
+        def make_html_problem(problem):
+            test_cases = problem["examples"]
+
+            title = problem["title"]
+            html_output = "<html><body>"
+            html_output += f"<h1>{title}</h1>"
+            html_output += f'<div>Time limit per test: {problem["time_limit"]} s</div>'
+            html_output += f"<h2>Description</h2>"
+            html_output += f"<div>{problem['description']}</div>"
+            html_output += f"<h2>Input Format</h2>"
+            html_output += f"<div>{problem['input_format']}</div>"
+            html_output += f"<h2>Output Format</h2>"
+            html_output += f"<div>{problem['output_format']}</div>"
+
+            if len(test_cases) > 0:
+                for tc in test_cases:
+                    html_output += f"<h2>Example</h2>"
+                    html_output += f"<h3>Input</h3>"
+                    html_output += f"<div>{tc['input']}</div>"
+                    html_output += f"<h3>Output</h3>"
+                    html_output += f"<div>{tc['output']}</div>"
+            if problem["interaction_format"]:
+                html_output += f"<h2>Interaction</h2>"
+                html_output += f"<div>{problem['interaction_format']}</div>"
+            if problem["note"]:
+                html_output += f"<h2>Note</h2>"
+                html_output += f"<div>{problem['note']}</div>"
+            if problem["editorial"]:
+                html_output += f"<h2>Editorial</h2>"
+                html_output += f"<div>{problem['editorial']}</div>"
+            html_output += "</body></html>"
+            return html_output
+
+        instruction = """You are a coding expert. Given a competition-level coding problem, you need to write a Python program to solve it. You may start by outlining your thought process. In the end, please provide the complete code in a code block enclosed with ``` ```. The code should take stdin as input and print the output. Your program should be a Python function generated from the given prompt. Simply call the function after the definition."""
 
         for i in range(self.n_repeat):
             all_instances = []
             seed = [s + i for s in self.seed]
 
             for idx, example in enumerate(examples):
-                if example["is_stdin"]:
-                    prompt_text = (
-                        "Generate an executable Python function generated from the given prompt. The function should take stdin as input and print the output. Simply call the function after the definition."
-                        + example["prompt"]
-                    )
-                else:
-                    prompt_text = (
-                        "Generate an executable Python function generated from the given prompt. Return the function body without invoking it at the final solution."
-                        + example["prompt"]
-                    )
+                prompt_text = f"{instruction}\n\n{make_html_problem(example)}"
                 messages = [{"role": "user", "content": prompt_text}]
 
                 templated_messages = self._prepare_messages(messages, model)
@@ -123,7 +151,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
                 all_instances.append(instance)
 
             # Generate model responses
-            self.logger.info("Generating responses for LiveCodeBench...")
+            self.logger.info("Generating responses for CodeForces...")
             outputs = self.compute(model, all_instances)
             all_outputs.append(outputs)
 
@@ -149,7 +177,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         :param completion_id: an optional completion ID so we can match
             the results later even if execution finishes asynchronously.
         """
-        result_list = lcb_run(problem, completion, timeout, is_extracted)
+        result_list = codeforces_run(problem, completion, timeout, is_extracted)
         details = [r[0] for r in result_list]
         all_passed = all(details)
 
@@ -164,7 +192,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         try:
             response_entry = {
                 "content": example["model_answer"],
-                "difficulty": example["difficulty"],
+                "difficulty": rating_to_difficulty(example["rating"]),
                 "correctness": None,
                 "reason": None,
             }
@@ -181,24 +209,24 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
                 problem_to_check = copy.deepcopy(example)
 
                 # Add debugging
-                self.logger.debug(f"Evaluating {example['difficulty']} problem...")
+                self.logger.debug(f"Evaluating problem...")
 
                 # Add timeout handling
                 curr_res = self.check_correctness(
                     problem=problem_to_check,
                     completion=post_process_code(last_code),
-                    timeout=6,
-                    is_extracted=not problem_to_check["is_stdin"],
+                    timeout=problem_to_check["time_limit"],
+                    is_extracted=False,
                 )
 
                 # Log the result
-                self.logger.debug(f"Result for {example['difficulty']}: {curr_res}")
+                self.logger.debug(f"Result: {curr_res}")
 
                 response_entry["correctness"] = curr_res
                 response_entry["reason"] = "" if curr_res else "Code is incorrect."
 
             except Exception as e:
-                self.logger.error(f"Error evaluating {example['difficulty']} example: {str(e)}")
+                self.logger.error(f"Error evaluating example: {str(e)}")
                 response_entry["correctness"] = False
                 response_entry["reason"] = f"Evaluation error: {str(e)}"
 
@@ -208,7 +236,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
             self.logger.error(f"Outer error in evaluate_single_example: {str(outer_e)}")
             return {
                 "content": example.get("model_answer"),
-                "difficulty": example.get("difficulty"),
+                "difficulty": rating_to_difficulty(example.get("rating")),
                 "correctness": False,
                 "reason": f"Critical error: {str(outer_e)}",
             }
@@ -261,7 +289,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
                         results[idx] = (
                             {
                                 "content": example["model_answer"],
-                                "difficulty": example["difficulty"],
+                                "difficulty": rating_to_difficulty(example["rating"]),
                                 "correctness": False,
                                 "reason": f"Future error: {str(e)}",
                             },
@@ -346,26 +374,8 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         return final_metrics
 
     def load_questions(self) -> Dataset:
-        """Load LiveCodeBench questions from source."""
-        self.logger.info("Loading LiveCodeBench questions from source and converting to dataset...")
-        cpu_count = os.cpu_count()
-        ds = load_dataset(
-            "livecodebench/code_generation_lite",
-            version_tag="release_v2",
-            split="test",
-            trust_remote_code=True,
-            cache_dir=HF_HUB_CACHE,
-        )
-        # Avoids "pyarrow.lib.ArrowInvalid: offset overflow while concatenating arrays" when mapping
-        processed_shards = []
-        num_shards = 4
-        for i in range(num_shards):
-            shard = ds.shard(num_shards=num_shards, index=i)
-            shard = shard.map(
-                lambda example: {"private_test_cases": translate_private_test_cases(example["private_test_cases"])},
-                num_proc=cpu_count,
-            )
-            shard = shard.map(map_to_example, remove_columns=ds.column_names)
-            processed_shards.append(shard)
-        ds = concatenate_datasets(processed_shards)
+        """Load CodeForces questions from source."""
+        self.logger.info("Loading CodeForces questions from source and converting to dataset...")
+        ds = load_dataset("open-r1/codeforces", cache_dir=HF_HUB_CACHE)["test"].to_list()
+        ds = [{**x, "difficulty": rating_to_difficulty(x["rating"])} for x in ds]
         return ds
