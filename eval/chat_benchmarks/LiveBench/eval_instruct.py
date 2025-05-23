@@ -172,6 +172,7 @@ class LiveBenchBenchmark(BaseBenchmark):
         for choice_num in range(self.num_choices):
             all_convs = [get_conversation_template(model_name) for _ in questions]
             for turn_num in range(max_turns):
+                all_instances = []  # Clear instances for each turn
                 for idx, (question, answer_file) in enumerate(questions):
                     if turn_num < len(question["turns"]):
                         qs = question["turns"][turn_num]
@@ -205,42 +206,47 @@ class LiveBenchBenchmark(BaseBenchmark):
                         tqdm_gen.refresh()
 
                 if all_instances:
-                    print(f"Computing... {len(questions)}")
+                    print(f"Computing... {len(all_instances)} instances for turn {turn_num}")
                     outputs = self.compute(model, all_instances)
 
-                    for idx, output in enumerate(outputs):
-                        # Match gen_model_answer.py output cleaning
-                        output = output.strip()
+                    # Create a mapping from instance to conversation index for proper result assignment
+                    # This handles both single-GPU and multi-GPU scenarios correctly
+                    for i, (instance, output) in enumerate(zip(all_instances, outputs)):
+                        if i < len(outputs) and instance.idx < len(all_convs):
+                            conv_idx = instance.idx
 
-                        # Handle stop strings like in gen_model_answer.py
-                        if all_convs[idx].stop_str and isinstance(all_convs[idx].stop_str, list):
-                            stop_str_indices = sorted(
-                                [
-                                    output.find(stop_str)
-                                    for stop_str in all_convs[idx].stop_str
-                                    if output.find(stop_str) > 0
-                                ]
-                            )
-                            if len(stop_str_indices) > 0:
-                                output = output[: stop_str_indices[0]]
-                        elif all_convs[idx].stop_str and output.find(all_convs[idx].stop_str) > 0:
-                            output = output[: output.find(all_convs[idx].stop_str)]
+                            # Match gen_model_answer.py output cleaning
+                            output = output.strip()
 
-                        # Handle special tokens like in gen_model_answer.py
-                        if hasattr(model, "tokenizer") and hasattr(model.tokenizer, "special_tokens_map"):
-                            for special_token in model.tokenizer.special_tokens_map.values():
-                                if isinstance(special_token, list):
-                                    for special_tok in special_token:
-                                        output = output.replace(special_tok, "")
-                                else:
-                                    output = output.replace(special_token, "")
+                            # Handle stop strings like in gen_model_answer.py
+                            if all_convs[conv_idx].stop_str and isinstance(all_convs[conv_idx].stop_str, list):
+                                stop_str_indices = sorted(
+                                    [
+                                        output.find(stop_str)
+                                        for stop_str in all_convs[conv_idx].stop_str
+                                        if output.find(stop_str) > 0
+                                    ]
+                                )
+                                if len(stop_str_indices) > 0:
+                                    output = output[: stop_str_indices[0]]
+                            elif all_convs[conv_idx].stop_str and output.find(all_convs[conv_idx].stop_str) > 0:
+                                output = output[: output.find(all_convs[conv_idx].stop_str)]
 
-                        # Handle xgen specific case like in gen_model_answer.py
-                        if all_convs[idx].name == "xgen" and output.startswith("Assistant:"):
-                            output = output.replace("Assistant:", "", 1).strip()
+                            # Handle special tokens like in gen_model_answer.py
+                            if hasattr(model, "tokenizer") and hasattr(model.tokenizer, "special_tokens_map"):
+                                for special_token in model.tokenizer.special_tokens_map.values():
+                                    if isinstance(special_token, list):
+                                        for special_tok in special_token:
+                                            output = output.replace(special_tok, "")
+                                    else:
+                                        output = output.replace(special_token, "")
 
-                        output = output.strip()
-                        all_convs[idx].update_last_message(output)
+                            # Handle xgen specific case like in gen_model_answer.py
+                            if all_convs[conv_idx].name == "xgen" and output.startswith("Assistant:"):
+                                output = output.replace("Assistant:", "", 1).strip()
+
+                            output = output.strip()
+                            all_convs[conv_idx].update_last_message(output)
             for idx, (_, answer_file) in enumerate(questions):
                 choice_idx = choice_num  # Current choice index
                 all_choices[answer_file][idx][choice_idx]["turns"] = [
@@ -248,7 +254,7 @@ class LiveBenchBenchmark(BaseBenchmark):
                 ]
 
         if model.rank != 0:
-            return all_choices
+            return None
 
         results = []
         for idx, (question, answer_file) in enumerate(questions):
@@ -421,16 +427,19 @@ class LiveBenchBenchmark(BaseBenchmark):
         }
         return result_dict
 
-    def run_benchmark(self) -> Dict[str, float]:
+    def run_benchmark(self, model: LM) -> Dict[str, float]:
         """
         Run the complete LiveBench benchmark evaluation pipeline.
+
+        Args:
+            model: Language model instance
 
         Returns:
             Dictionary containing evaluation metrics
         """
         self.logger.info("Starting LiveBench benchmark evaluation")
         try:
-            generation_results = self.generate_responses()
+            generation_results = self.generate_responses(model)
 
             if generation_results is None:
                 return None

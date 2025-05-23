@@ -97,13 +97,22 @@ class BaseBenchmark(ABC):
 
             dist.all_gather_object(all_results, results)
 
-            # Merge results from all ranks
-            length = sum(len(res) for res in all_results if res is not None)
-            merged = [None] * length
-            for rank, sub_results in enumerate(all_results):
-                if sub_results is not None:
-                    for i, item in enumerate(sub_results):
-                        merged[i * model.world_size + rank] = item
+            # Merge results from all ranks to handle uneven distribution
+            merged = []
+            for rank in range(model.world_size):
+                if all_results[rank] is not None:
+                    for i, item in enumerate(all_results[rank]):
+                        # Calculate the original index in the input list
+                        original_idx = i * model.world_size + rank
+                        # Ensure we don't exceed the original input length
+                        if original_idx < len(inputs):
+                            # Extend merged list if necessary
+                            while len(merged) <= original_idx:
+                                merged.append(None)
+                            merged[original_idx] = item
+
+            # Remove any None values that might have been added
+            merged = [item for item in merged if item is not None]
             return merged
         else:
             return results
