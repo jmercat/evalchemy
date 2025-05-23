@@ -239,8 +239,11 @@ class CuratorAPIModel(TemplateLM):
 
         contexts_dataset = self.create_message(contexts)
         payload = self._create_payload(contexts_dataset, generate=True, gen_kwargs=gen_kwargs[0])
-        response = self.llm(payload)["response"]
-        return response
+        response = self.llm(payload)
+        if isinstance(response, dict) and "response" in response:
+            return response["response"]
+        else:
+            return response.dataset["response"]
 
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False) -> List[float]:
         raise NotImplementedError("Log likelihood rolling not implemented for curator.")
