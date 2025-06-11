@@ -47,6 +47,7 @@ class CodeForcesBenchmark(BaseBenchmark):
         self,
         debug: bool = False,
         seed: List[int] = [0, 1234, 1234, 1234],
+        max_tokens: int = 32768,
         logger: Optional[logging.Logger] = None,
         system_instruction: Optional[str] = None,
     ):
@@ -61,8 +62,8 @@ class CodeForcesBenchmark(BaseBenchmark):
         """
         super().__init__(logger=logger, system_instruction=system_instruction)
         self.debug = debug
-        self.max_new_tokens = 32768  # set higher to avoid truncation for reasoning models
         self.seed = seed
+        self.max_new_tokens = max_tokens
         self.n_repeat = 3
         self.filter_interaction_questions = True
 

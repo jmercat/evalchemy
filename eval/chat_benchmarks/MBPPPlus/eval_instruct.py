@@ -22,10 +22,10 @@ class MBPPPlusBenchmark(BaseBenchmark):
     def __init__(
         self,
         data_dir: str = "eval/chat_benchmarks/MBPPPlus/data",
-        max_tokens: int = 1024,
         num_workers: int = 8,
         timeout: float = 3.0,
         debug: bool = False,
+        max_tokens: int = 1024,
         logger: Optional[logging.Logger] = None,
         system_instruction: Optional[str] = None,
     ):
@@ -148,7 +148,7 @@ Here is my problem:
                             (
                                 inputs,
                                 {
-                                    "max_gen_toks": self.max_tokens,
+                                    "max_new_tokens": self.max_tokens,
                                     "do_sample": False,
                                 },
                             ),

@@ -14,11 +14,11 @@ class IFEvalBenchmark(BaseBenchmark):
     def __init__(
         self,
         data_dir: str = "eval/chat_benchmarks/IFEval/data",
-        max_tokens: int = 512,
         num_examples: int = 3,
         start_idx: int = 10,
         end_idx: int = 510,
         debug: bool = False,
+        max_tokens: int = 512,
         logger: Optional[logging.Logger] = None,
         system_instruction: Optional[str] = None,
     ):
@@ -102,7 +102,7 @@ class IFEvalBenchmark(BaseBenchmark):
                             (
                                 inputs,
                                 {
-                                    "max_gen_toks": self.max_tokens,
+                                    "max_new_tokens": self.max_tokens,
                                     "do_sample": False,
                                 },
                             ),
